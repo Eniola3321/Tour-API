@@ -1,7 +1,62 @@
+import multer from 'multer';
+import sharp from 'sharp';
 import Tour from '../models/toursModel.js';
 import APIFeatures from '../utils/apiFeatures.js';
 import AppError from '../utils/appErrors.js';
+import {
+  createOne,
+  deleteOne,
+  updateOne,
+} from '../controllers/handlerFactory.js';
 // import catchAsync from '../utils/catchAsync.js';
+
+const multerStorage = multer.memoryStorage(); // image will be store as a buffer;
+
+const multerFilter = (req, file, cb) => {
+  if (file.mimetype.startsWith('image')) {
+    cb(null, true);
+  } else {
+    cb(new AppError('Not an image! Please upload only images.', 400), false);
+  }
+};
+const upload = multer({ storage: multerStorage, fileFilter: multerFilter });
+
+// const upload = multer({ dest: 'public/img/users' });
+export const uploadTourImage = upload.fields([
+  { name: 'imageCover', maxCount: 1 },
+  { name: 'images', maxCount: 3 },
+]);
+export const resizeTourImage = async (req, res, next) => {
+  try {
+    // console.log(req.files);
+    if (!req.files.imageCover || !req.files.images) return next();
+    //1) Cover Image
+    req.body.imageCover = `tour-${req.params.id}-${Date.now()}-cover.jpeg `;
+    await sharp(req.files.imageCover[0].buffer)
+      .resize(2000, 1333)
+      .toFormat('jpeg')
+      .jpeg({ quality: 90 })
+      .toFile(`public/img/tours/${req.body.imageCover}`);
+    //2) Images
+    req.body.images = [];
+    await Promise.all(
+      req.files.images.map(async (file, i) => {
+        const filename = `tour-${req.params.id}-${Date.now()}-${i + 1}.jpeg `;
+        await sharp(file.buffer)
+          .resize(2000, 1333)
+          .toFormat('jpeg')
+          .jpeg({ quality: 90 })
+          .toFile(`public/img/tours/${filename}`);
+
+        req.body.images.push(filename);
+      }),
+    );
+    next();
+  } catch (err) {
+    res.status(400).json({ status: 'fail', message: err.message });
+  }
+  next();
+};
 export const aliasTopTours = (req, res, next) => {
   req.query.limit = '5';
   req.query.sort = '-ratingsAverage, price';
@@ -32,25 +87,11 @@ export const getAllTours = async (req, res) => {
   }
 };
 
-export const createTours = async (req, res) => {
-  try {
-    /*const newTour = new Tour({});
-    newTour.save();*/
-    const newTour = await Tour.create(req.body);
-    res.status(201).json({
-      status: 'success',
-      data: {
-        tour: newTour,
-      },
-    });
-  } catch (err) {
-    res.status(400).json({ status: 'fail', message: err });
-  }
-};
+export const createTours = createOne(Tour);
 export const getTour = async (req, res, next) => {
   try {
     console.log(req.params);
-    const tour = await Tour.findById(req.params.id);
+    const tour = await Tour.findById(req.params.id).populate('review');
     if (!tour) {
       return next(new AppError('No Tour found with that ID', 404));
     }
@@ -151,6 +192,92 @@ export const getMonthlyPlan = async (req, res) => {
     res.status(400).json({ status: 'fail', message: err });
   }
 };
+export const updateTours = updateOne(Tour);
+export const delTour = deleteOne(Tour);
+
+//'/tours-within/:distance/center/:latlng/unit/:unit',
+// /tours-distance/233/center/34.111745, -118.113491/unit/mi
+export const getToursWithin = async (req, res, next) => {
+  try {
+    const { distance, latlng, unit } = req.params;
+    const [lat, lng] = latlng.split(',');
+    const radius = unit === 'mi' ? distance / 3963.2 : distance / 6378.1;
+    if (!lat || !lng) {
+      return next(
+        new AppError(
+          'please provide latitude and longitude in the format lat, lng.',
+        ),
+        400,
+      );
+    }
+    // console.log(distance, center, lat, lng, unit);
+    const tours = await Tour.find({
+      startLocation: { $geoWithin: { $centerSphere: [[lng, lat], radius] } },
+    });
+    res.status(200).json({
+      status: 'success',
+      results: tours.length,
+      data: { data: tours },
+    });
+  } catch (err) {
+    res.status(400).json({ status: 'fail', message: err });
+  }
+};
+export const getDistances = async (req, res, next) => {
+  try {
+    const { latlng, unit } = req.params;
+    const [lat, lng] = latlng.split(',');
+    const multiplier = unit === 'mi' ? 0.000621371 : 0.001;
+    if (!lat || !lng) {
+      return next(
+        new AppError(
+          'please provide latitude and longitude in the format lat, lng.',
+        ),
+        400,
+      );
+    }
+    const distance = await Tour.aggregate([
+      {
+        $geoNear: {
+          near: {
+            type: 'point',
+            coordinates: [lng * 1, lat * 1],
+          },
+          distanceField: 'distance',
+          distanceMultiplier: multiplier,
+        },
+      },
+      {
+        $project: {
+          distance: 1,
+          name: 1,
+        },
+      },
+    ]);
+    res.status(200).json({
+      status: 'success',
+      data: { data: distance },
+    });
+  } catch (err) {
+    res.status(400).json({ status: 'fail', message: err });
+  }
+};
+/*
+export const createTours = async (req, res) => {
+  try {
+    /*const newTour = new Tour({});
+    newTour.save(); 
+    const newTour = await Tour.create(req.body);
+    res.status(201).json({
+      status: 'success',
+      data: {
+        tour: newTour,
+      },
+    });
+  } catch (err) {
+    res.status(400).json({ status: 'fail', message: err });
+  }
+};
 export const updateTours = async (req, res) => {
   try {
     const tour = await Tour.findByIdAndUpdate(req.params.id, req.body, {
@@ -179,7 +306,7 @@ export const delTour = async (req, res, next) => {
     res.status(404).json({ status: 'fail', message: err });
   }
 };
-/*export const getAllTours = async (req, res) => {
+export const getAllTours = async (req, res) => {
   try {
     // BUILD QUERY //
     //1a) Filtering

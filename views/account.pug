@@ -1,0 +1,13 @@
+extends base
+
+block content
+  h1 Your Account
+  form(action="/submit-account" method="POST")
+    div
+      label(for="name") Name:
+      input(type="text" id="name" name="name" required)
+    div
+      label(for="email") Email:
+      input(type="email" id="email" name="email" required)
+    div
+      button(type="submit") Update Account

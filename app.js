@@ -1,4 +1,7 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
+import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import mongoSanitize from 'express-mongo-sanitize';
@@ -9,9 +12,20 @@ import AppError from './utils/appErrors.js';
 import globalErrorHandler from './controllers/errorController.js';
 import userRouters from './routes/usersRouter.js';
 import tourRouters from './routes/toursRouter.js';
+import reviewRouter from './routes/reviewRouter.js';
+import viewRouter from './routes/viewRouter.js';
+import bookingRouter from './routes/bookingsRouter.js';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
+app.set('view engine', 'pug');
+app.set('views', path.join(__dirname, '/views'));
+
 //*)GLOBAL MIDDLEWARES
+app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.urlencoded({ extended: true }));
+// app.use(express.json('./public'));
 // Set Security HTTP headers
 app.use(helmet());
 // Development Logging
@@ -28,6 +42,9 @@ app.use('/api', limiter);
 //1) MIDDLEWARES
 // Body parser, reading data from body into req.body
 app.use(express.json());
+
+// Parse cookies
+app.use(cookieParser());
 
 // Data sanitization against NoSQL query Injection
 app.use(mongoSanitize());
@@ -47,14 +64,14 @@ app.use(
   }),
 );
 // Serving static files
-app.use(express.static('./public'));
-app.use((req, res, next) => {
-  // console.log('Hello from there! middleware');
-  // console.log(req.headers);
-  next();
-});
+
+// routes handler
+app.use('/', viewRouter);
 app.use('/api/v1/tours', tourRouters);
 app.use('/api/v1/users', userRouters);
+app.use('/api/v1/reviews', reviewRouter);
+app.use('/api/v1/bookings', bookingRouter);
+
 app.all('*', (req, res, next) => {
   next(new AppError(`can't find ${req.originalUrl} on this server!`));
   // // res.status(404).json({

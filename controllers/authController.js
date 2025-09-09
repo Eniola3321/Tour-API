@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import { promisify } from 'util';
 import AppError from '../utils/appErrors.js';
-import sendEmail from '../utils/email.js';
+import Email from '../utils/email.js';
 
 import { log } from 'console';
 dotenv.config();
@@ -38,15 +38,22 @@ const createSendToken = (user, statusCode, res) => {
 };
 
 // SIGN UP USERS //
-export const signUp = async (req, res) => {
+export const signUp = async (req, res, next) => {
   try {
     const newUser = await User.create(req.body);
-    /* const token = jwt.sign({ id: newUser._id }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRES_IN,
-    });*/
+    const url = `${req.protocol}://${req.get('host')}/me`;
+    console.log(url);
+    await new Email(newUser, url).sendWelcome();
     createSendToken(newUser, 201, res);
   } catch (err) {
-    res.status(400).json({ status: 'fail', message: err.message });
+    console.error('ERROR IN signUp:', err);
+    // Optionally, you can delete the user if email fails, but for now, just return error
+    return next(
+      new AppError(
+        'There was an error sending the welcome email. Please try again later!',
+        500,
+      ),
+    );
   }
 };
 // LOGIN USERS //
@@ -80,6 +87,9 @@ export const protect = async (req, res, next) => {
       token = authorizationHeader.split(' ')[1];
       console.log('authorizationHeader:', authorizationHeader);
       console.log('token:', token);
+    } else if (req.cookies.jwt) {
+      token = req.cookies.jwt;
+      console.log('token from cookie:', token);
     }
     // check if the token actually exists
     if (!token) {
@@ -97,7 +107,7 @@ export const protect = async (req, res, next) => {
     const currentUser = await User.findById(decoded.id);
     if (!currentUser) {
       return next(
-        'The user belonging to this token does not longer exist.',
+        new AppError('The user belonging to this token does not longer exist.'),
         401,
       );
     }
@@ -117,13 +127,42 @@ export const protect = async (req, res, next) => {
     res.status(400).json({ status: 'fail', message: err });
   }
 };
+// Only for rendered pages, no errors!
+export const isLoggedIn = async (req, res, next) => {
+  try {
+    //1) Getting token and check if it's there
+    if (req.cookies.jwt) {
+      // verify token
+      const decoded = await promisify(jwt.verify)(
+        req.cookies.jwt,
+        process.env.JWT_SECRET,
+      );
+      console.log(decoded);
+      // 4) check if currentUser still exists
+      const currentUser = await User.findById(decoded.id);
+      if (!currentUser) {
+        return next();
+      }
+      // 5) check if user changed password after the token was issued
+      if (currentUser.changedPasswordAfter(decoded.iat)) {
+        return next();
+      }
+      // There  is a logged in user
+      req.locals.user = currentUser;
+      return next();
+    }
+    next();
+  } catch (err) {
+    res.status(400).json({ status: 'fail', message: err });
+  }
+};
 
 //AUTHORIZATION USER ROLE && PERMISSION //
 export const restrictTo = (...roles) => {
   return (req, res, next) => {
     // roles is an array i.e ['admin', 'lead-guide']
-    if (!roles.includes(req.user.role)) {
-      next(
+    if (!req.user || !roles.includes(req.user.role)) {
+      return next(
         new AppError('you do not have permission to perform this action', 403),
       );
     }
@@ -146,13 +185,8 @@ export const forgotPassword = async (req, res, next) => {
 
     //3) send it back as user's email
     const resetURL = `${req.protocol}://${req.get('host')}/api/v1/users/resetPassword/${resetToken}`;
-    const message = `Forget your password? Submit a PATCH request with your new password and passwordConfirm to ${resetURL}.
-    \n If you didn't forget password, please ignore this email `;
-    await sendEmail({
-      email: user.email,
-      subject: 'Your password reset token (valid for 10 min)',
-      message,
-    });
+    await new Email(user, resetURL).sendPasswordReset();
+
     res
       .status(200)
       .json({ status: 'success', message: 'Token sent to email!' });
