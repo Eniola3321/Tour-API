@@ -110,7 +110,7 @@ export const deleteMe = async (req, res) => {
 };
 export const getUser = async (req, res) => {
   try {
-    const user = User.findById(req.params.id);
+    const user = await User.findById(req.params.id);
     res.status(200).json({
       status: 'success',
       data: {
